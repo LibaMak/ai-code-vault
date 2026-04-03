@@ -18,7 +18,6 @@ st.set_page_config(
 # -----------------------------------
 st.markdown("""
 <style>
-    /* Main App */
     .stApp {
         background: linear-gradient(135deg, #09070d, #120c1f, #1a1229);
         color: #f5f3ff;
@@ -28,10 +27,9 @@ st.markdown("""
     .block-container {
         padding-top: 2rem;
         padding-bottom: 2rem;
-        max-width: 1400px;
+        max-width: 1450px;
     }
 
-    /* Sidebar */
     section[data-testid="stSidebar"] {
         background: linear-gradient(180deg, #0b0911, #140f1f);
         border-right: 1px solid rgba(255,255,255,0.06);
@@ -41,18 +39,16 @@ st.markdown("""
         color: #f1ebff !important;
     }
 
-    /* Headings */
     h1, h2, h3, h4, h5 {
         color: #ffffff !important;
         font-weight: 700;
-        letter-spacing: 0.5px;
+        letter-spacing: 0.4px;
     }
 
     p, span, div, label {
         color: #d6cfff;
     }
 
-    /* Glass Cards */
     .glass-card {
         background: rgba(32, 21, 50, 0.72);
         backdrop-filter: blur(14px);
@@ -64,13 +60,21 @@ st.markdown("""
         margin-bottom: 1rem;
     }
 
-    /* Buttons */
+    .hero-card {
+        background: linear-gradient(135deg, rgba(76,29,149,0.55), rgba(17,24,39,0.72));
+        border: 1px solid rgba(180, 130, 255, 0.15);
+        border-radius: 24px;
+        padding: 2rem;
+        box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+        margin-bottom: 1.5rem;
+    }
+
     .stButton > button {
         background: linear-gradient(90deg, #7b2ff7, #9f44ff);
         color: white;
         border: none;
         border-radius: 12px;
-        padding: 0.6rem 1rem;
+        padding: 0.65rem 1rem;
         font-weight: 600;
         transition: 0.3s ease;
         box-shadow: 0 0 18px rgba(123, 47, 247, 0.35);
@@ -82,7 +86,6 @@ st.markdown("""
         box-shadow: 0 0 25px rgba(159, 68, 255, 0.55);
     }
 
-    /* Inputs */
     .stTextInput > div > div > input,
     .stTextArea textarea {
         background-color: rgba(20, 16, 31, 0.95) !important;
@@ -92,7 +95,6 @@ st.markdown("""
         padding: 0.75rem !important;
     }
 
-    /* Chat Input */
     div[data-testid="stChatInput"] textarea {
         background-color: rgba(20, 16, 31, 0.95) !important;
         color: #ffffff !important;
@@ -100,7 +102,6 @@ st.markdown("""
         border: 1px solid rgba(180, 130, 255, 0.25) !important;
     }
 
-    /* Metrics */
     div[data-testid="metric-container"] {
         background: rgba(32, 21, 50, 0.72);
         border: 1px solid rgba(180, 130, 255, 0.15);
@@ -109,7 +110,6 @@ st.markdown("""
         box-shadow: 0 6px 20px rgba(0,0,0,0.25);
     }
 
-    /* Chat Messages */
     .chat-user {
         background: rgba(80, 40, 130, 0.35);
         padding: 1rem;
@@ -142,12 +142,16 @@ st.markdown("""
         font-size: 14px;
     }
 
-    /* Divider line */
-    hr {
-        border: none;
-        border-top: 1px solid rgba(255,255,255,0.08);
+    .status-pill {
+        display: inline-block;
+        padding: 6px 12px;
+        border-radius: 999px;
+        background: rgba(123,47,247,0.18);
+        border: 1px solid rgba(180,130,255,0.15);
+        margin-right: 8px;
+        margin-top: 8px;
+        font-size: 13px;
     }
-
 </style>
 """, unsafe_allow_html=True)
 
@@ -160,6 +164,9 @@ if "is_authenticated" not in st.session_state:
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = []
 
+if "current_page" not in st.session_state:
+    st.session_state.current_page = "login"
+
 # -----------------------------------
 # AUTH
 # -----------------------------------
@@ -167,14 +174,24 @@ def check_login(username: str, password: str) -> bool:
     return username.strip().lower() == "demo" and password.strip() == "vault123"
 
 # -----------------------------------
-# MOCK AI RESPONSES
+# MOCK AI RESPONSE (temporary)
+# Replace later with your real backend/database call
 # -----------------------------------
 def get_mock_response(question: str):
     lowered = question.lower()
 
+    if "database" in lowered or "sql" in lowered:
+        return (
+            "Database connector is currently in demo mode. In production, this section will query your backend and retrieve live structured records.",
+            [
+                "db_connector.py (future backend module)",
+                "schema_reference.sql (planned integration)"
+            ],
+        )
+
     if "model" in lowered or "ai" in lowered:
         return (
-            "The active mock pipeline uses retrieval-augmented prompting, semantic ranking, and a lightweight reasoning layer for response synthesis.",
+            "The active mock pipeline uses retrieval-augmented prompting and semantic ranking before response generation.",
             [
                 "Model_Design_Guide.pdf (Section 2.1)",
                 "pipeline_overview.py (lines 14-39)",
@@ -183,60 +200,45 @@ def get_mock_response(question: str):
 
     if "index" in lowered or "file" in lowered or "vault" in lowered:
         return (
-            "Vault indexing is marked complete. Documents are parsed, chunked, embedded, and stored into a placeholder semantic vector structure for demo retrieval.",
+            "Vault indexing is simulated as complete. Files are parsed, chunked, and prepared for semantic retrieval.",
             [
                 "indexing_notes.pdf (Page 3)",
                 "index_manager.py (lines 51-87)",
             ],
         )
 
-    if "speed" in lowered or "performance" in lowered:
-        return (
-            "System performance remains within target demo thresholds, maintaining stable response generation and retrieval under concurrent prompt simulation.",
-            [
-                "analytics_summary.pdf (Page 1)",
-                "benchmark_runner.py (lines 8-26)",
-            ],
-        )
-
-    fallback_responses = [
-        (
-            "The vault pipeline successfully parsed all mock documents and prepared context-aware snippets for downstream assistant generation.",
-            [
-                "vault_status_report.pdf (Page 2)",
-                "context_builder.py (lines 21-63)",
-            ],
-        ),
-        (
-            "Mock retrieval indicates strong semantic alignment and high confidence for this query class across indexed vault assets.",
-            [
-                "retrieval_log.pdf (Page 4)",
-                "retriever.py (lines 34-59)",
-            ],
-        ),
-    ]
-    return random.choice(fallback_responses)
+    return (
+        "Your AI assistant is currently running in demo mode. Once connected, this panel will respond using your actual backend and database.",
+        [
+            "backend_api.py (future integration)",
+            "vector_store.py (future integration)"
+        ],
+    )
 
 # -----------------------------------
 # LOGIN PAGE
 # -----------------------------------
 def render_login_page():
     st.markdown("<h1 style='text-align:center;'>🧠 AI Code Vault</h1>", unsafe_allow_html=True)
-    st.markdown("<p class='small-muted' style='text-align:center;'>Secure AI Retrieval & Code Intelligence Platform</p>", unsafe_allow_html=True)
+    st.markdown("<p class='small-muted' style='text-align:center;'>Secure AI Retrieval & Intelligent Chat Workspace</p>", unsafe_allow_html=True)
 
-    col1, col2, col3 = st.columns([1, 1.3, 1])
+    col1, col2, col3 = st.columns([1, 1.25, 1])
+
     with col2:
         st.markdown('<div class="glass-card">', unsafe_allow_html=True)
-        st.subheader("🔐 Sign in to continue")
+        st.subheader("🔐 Login to Access Workspace")
+
         username = st.text_input("Username", placeholder="demo")
         password = st.text_input("Password", type="password", placeholder="vault123")
 
         c1, c2 = st.columns(2)
+
         with c1:
             if st.button("Login", use_container_width=True):
                 if check_login(username, password):
                     st.session_state.is_authenticated = True
-                    st.success("Access granted.")
+                    st.session_state.current_page = "workspace"
+                    st.success("Login successful.")
                     st.rerun()
                 else:
                     st.error("Invalid credentials. Use demo / vault123")
@@ -244,61 +246,92 @@ def render_login_page():
         with c2:
             if st.button("Use Demo Login", use_container_width=True):
                 st.session_state.is_authenticated = True
+                st.session_state.current_page = "workspace"
                 st.success("Demo access enabled.")
                 st.rerun()
 
-        st.markdown("<hr>", unsafe_allow_html=True)
-        st.markdown("<p class='small-muted'>Demo credentials are enabled for project presentation purposes.</p>", unsafe_allow_html=True)
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown("<p class='small-muted'>This login screen leads to the main AI workspace where the chatbot will later connect to your real backend, database, and retrieval pipeline.</p>", unsafe_allow_html=True)
         st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------------
-# SIDEBAR
+# SIDEBAR INSIDE WORKSPACE
 # -----------------------------------
 def render_sidebar():
     st.sidebar.markdown("## 🧠 AI Code Vault")
-    st.sidebar.markdown("<p class='small-muted'>Intelligent Retrieval Dashboard</p>", unsafe_allow_html=True)
+    st.sidebar.markdown("<p class='small-muted'>Main AI Workspace</p>", unsafe_allow_html=True)
 
     selected = st.sidebar.radio(
         "Navigation",
-        ["💬 Chat Assistant", "📁 Vault Overview", "📊 Analytics Dashboard"]
+        ["🤖 Main Chatbot", "📁 Vault Files", "📊 Analytics", "⚙ Backend Status"]
     )
 
     st.sidebar.markdown("---")
-    st.sidebar.markdown("### ⚡ System Status")
-    st.sidebar.success("Vault Indexed")
-    st.sidebar.info("Demo Mode Active")
-    st.sidebar.warning("Confidence Engine Online")
+    st.sidebar.markdown("### ⚡ Live System State")
+    st.sidebar.success("Workspace Active")
+    st.sidebar.info("Authentication Passed")
+    st.sidebar.warning("Backend Connection: Demo Mode")
 
     st.sidebar.markdown("---")
     if st.sidebar.button("🚪 Logout", use_container_width=True):
         st.session_state.is_authenticated = False
+        st.session_state.current_page = "login"
         st.session_state.chat_history = []
         st.rerun()
 
     return selected
 
 # -----------------------------------
-# CHAT PAGE
+# MAIN CHATBOT PAGE
 # -----------------------------------
-def render_chat_page():
-    st.title("💬 AI Assistant Chat")
-    st.caption("Ask anything about your indexed vault content.")
+def render_main_chatbot():
+    st.markdown('<div class="hero-card">', unsafe_allow_html=True)
+    st.title("🤖 Main Chatbot Interface")
+    st.write("This is your **main AI workspace**. Later, this chatbot will connect to your **actual database, backend API, document vault, and retrieval pipeline**.")
+    st.markdown("""
+    <span class="status-pill">AI Assistant Ready</span>
+    <span class="status-pill">Backend Placeholder Active</span>
+    <span class="status-pill">Database Integration Pending</span>
+    <span class="status-pill">RAG Pipeline Ready for Hookup</span>
+    """, unsafe_allow_html=True)
+    st.markdown('</div>', unsafe_allow_html=True)
 
-    st.markdown('<div class="glass-card">💡 <b>Try:</b> "How does the indexing work?" or "What model is being used?"</div>', unsafe_allow_html=True)
+    st.markdown('<div class="glass-card">💡 <b>Future purpose:</b> Ask database questions, retrieve file knowledge, generate intelligent responses, and connect with your backend.</div>', unsafe_allow_html=True)
 
     for item in st.session_state.chat_history:
         st.markdown(f'<div class="chat-user"><b>👤 You:</b><br>{item["question"]}</div>', unsafe_allow_html=True)
-        st.markdown(f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{item["answer"]}<br><br><span class="confidence">Confidence Score: 95%</span><br><br><b>Source Citations:</b><br>' + "".join([f"<div class='source'>• {src}</div>" for src in item["sources"]]) + '</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{item["answer"]}'
+            f'<br><br><span class="confidence">Confidence Score: 95%</span>'
+            f'<br><br><b>Source Citations:</b><br>'
+            + "".join([f"<div class='source'>• {src}</div>" for src in item["sources"]])
+            + '</div>',
+            unsafe_allow_html=True
+        )
 
-    question = st.chat_input("Ask a question about the vault...")
+    question = st.chat_input("Ask your AI assistant...")
+
     if question:
         st.markdown(f'<div class="chat-user"><b>👤 You:</b><br>{question}</div>', unsafe_allow_html=True)
 
-        with st.spinner("AI is analyzing vault context..."):
+        with st.spinner("AI is processing your query..."):
             time.sleep(1.2)
+
+            # -----------------------------------
+            # FUTURE BACKEND CONNECTION POINT
+            # Replace this later with:
+            # answer, sources = call_backend_api(question)
+            # -----------------------------------
             answer, sources = get_mock_response(question)
 
-        st.markdown(f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{answer}<br><br><span class="confidence">Confidence Score: 95%</span><br><br><b>Source Citations:</b><br>' + "".join([f"<div class='source'>• {src}</div>" for src in sources]) + '</div>', unsafe_allow_html=True)
+        st.markdown(
+            f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{answer}'
+            f'<br><br><span class="confidence">Confidence Score: 95%</span>'
+            f'<br><br><b>Source Citations:</b><br>'
+            + "".join([f"<div class='source'>• {src}</div>" for src in sources])
+            + '</div>',
+            unsafe_allow_html=True
+        )
 
         st.session_state.chat_history.append({
             "question": question,
@@ -310,8 +343,8 @@ def render_chat_page():
 # VAULT PAGE
 # -----------------------------------
 def render_vault_page():
-    st.title("📁 Vault Overview")
-    st.caption("Indexed Assets (Hardcoded Demo Data)")
+    st.title("📁 Vault Files")
+    st.caption("Hardcoded demo files for now — later connect real uploaded / indexed files")
 
     indexed_files = [
         "main.py", "retriever.py", "index_manager.py", "context_builder.py",
@@ -331,7 +364,7 @@ def render_vault_page():
 # -----------------------------------
 def render_analytics_page():
     st.title("📊 Analytics Dashboard")
-    st.caption("System Performance & Accuracy Metrics")
+    st.caption("System metrics for your AI assistant workspace")
 
     processing_speed = 82
     accuracy = 95
@@ -357,16 +390,56 @@ def render_analytics_page():
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------------
+# BACKEND STATUS PAGE
+# -----------------------------------
+def render_backend_status():
+    st.title("⚙ Backend Connection Panel")
+    st.caption("This page shows where your real backend and DB will be connected.")
+
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("🔌 Planned Backend Integration")
+    st.write("""
+    This is where your system will later connect to:
+
+    - **SQL / Oracle / MySQL / PostgreSQL Database**
+    - **Python backend (Flask / FastAPI / Django)**
+    - **RAG pipeline**
+    - **Vector database**
+    - **Document retrieval engine**
+    - **AI model response generation**
+    """)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+    st.subheader("🧠 Future Chatbot Flow")
+    st.code("""
+User enters query
+   ↓
+Frontend (Streamlit)
+   ↓
+Backend API
+   ↓
+Database / File Retriever / Vector Search
+   ↓
+AI Response Generation
+   ↓
+Answer shown in chatbot
+    """)
+    st.markdown("</div>", unsafe_allow_html=True)
+
+# -----------------------------------
 # APP FLOW
 # -----------------------------------
-if not st.session_state.is_authenticated:
+if not st.session_state.is_authenticated or st.session_state.current_page == "login":
     render_login_page()
 else:
-    page = render_sidebar()
+    selected_page = render_sidebar()
 
-    if page == "💬 Chat Assistant":
-        render_chat_page()
-    elif page == "📁 Vault Overview":
+    if selected_page == "🤖 Main Chatbot":
+        render_main_chatbot()
+    elif selected_page == "📁 Vault Files":
         render_vault_page()
-    elif page == "📊 Analytics Dashboard":
+    elif selected_page == "📊 Analytics":
         render_analytics_page()
+    elif selected_page == "⚙ Backend Status":
+        render_backend_status()
