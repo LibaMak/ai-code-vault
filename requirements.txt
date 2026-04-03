@@ -1,0 +1,6 @@
+streamlit
+pandas
+matplotlib
+groq
+sentence-transformers
+mysql-connector-python
