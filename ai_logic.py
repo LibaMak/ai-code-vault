@@ -15,6 +15,11 @@ from groq import Groq
 from processor import FileProcessingError, get_embeddings
 
 
+DEFAULT_ROUTER_MODEL = "llama-3.1-8b-instant"
+DEFAULT_ANSWER_MODEL = "llama-3.3-70b-versatile"
+FALLBACK_MODELS = ("llama-3.1-8b-instant",)
+
+
 class AIServiceError(Exception):
     """Raised when AI provider config or inference fails."""
 
@@ -50,6 +55,42 @@ def _get_groq_client(api_key: str | None = None) -> Groq:
     return Groq(api_key=key)
 
 
+def _invoke_with_model_fallback(
+    client: Groq,
+    messages: list[dict[str, str]],
+    primary_model: str,
+    *,
+    temperature: float,
+    max_tokens: int,
+):
+    """Call Groq chat completion and retry if a model is decommissioned."""
+    models_to_try: list[str] = [primary_model]
+    for fallback_model in FALLBACK_MODELS:
+        if fallback_model not in models_to_try:
+            models_to_try.append(fallback_model)
+
+    last_error: Exception | None = None
+
+    for model_name in models_to_try:
+        try:
+            return client.chat.completions.create(
+                model=model_name,
+                temperature=temperature,
+                max_tokens=max_tokens,
+                messages=messages,
+            )
+        except Exception as exc:  # pragma: no cover - API behavior varies by runtime
+            last_error = exc
+            error_text = str(exc).lower()
+            if "decommission" in error_text or "model_decommissioned" in error_text:
+                continue
+            raise
+
+    raise AIServiceError(
+        f"No available Groq model could be used. Last error: {last_error}"
+    )
+
+
 def route_query(query: str, api_key: str | None = None) -> str:
     """Route query into one of: Search the Vault, Summarize a File, Explain Code."""
     cleaned = (query or "").strip()
@@ -83,8 +124,10 @@ def route_query(query: str, api_key: str | None = None) -> str:
     # LLM fallback for ambiguous prompts.
     try:
         client = _get_groq_client(api_key)
-        response = client.chat.completions.create(
-            model="llama3-70b-8192",
+        router_model = os.getenv("GROQ_ROUTER_MODEL", DEFAULT_ROUTER_MODEL)
+        response = _invoke_with_model_fallback(
+            client=client,
+            primary_model=router_model,
             temperature=0,
             max_tokens=12,
             messages=[
@@ -165,7 +208,7 @@ def answer_with_context(
     query: str,
     context_index: dict[str, Any],
     api_key: str | None = None,
-    model: str = "llama3-70b-8192",
+    model: str = DEFAULT_ANSWER_MODEL,
     top_k: int = 3,
 ) -> dict[str, Any]:
     """Run retrieval + grounded answer generation through Groq.
@@ -208,8 +251,10 @@ def answer_with_context(
         )
 
         client = _get_groq_client(api_key)
-        completion = client.chat.completions.create(
-            model=model,
+        answer_model = os.getenv("GROQ_MODEL", model)
+        completion = _invoke_with_model_fallback(
+            client=client,
+            primary_model=answer_model,
             temperature=0.2,
             max_tokens=420,
             messages=[
