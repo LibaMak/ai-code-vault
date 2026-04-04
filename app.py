@@ -1,9 +1,13 @@
-import random
+import os
 import time
+from pathlib import Path
 
 import matplotlib.pyplot as plt
 import pandas as pd
 import streamlit as st
+
+from ai_logic import answer_with_context, build_context_index
+from processor import FileProcessingError, chunk_data, extract_text
 
 
 st.set_page_config(
@@ -112,6 +116,25 @@ def init_state() -> None:
         st.session_state.chat_history = []
     if "latencies" not in st.session_state:
         st.session_state.latencies = [1.84, 1.62, 1.47, 1.73, 1.56, 1.35, 1.41, 1.28, 1.59, 1.44]
+    if "context_index" not in st.session_state:
+        st.session_state.context_index = {"items": [], "embeddings": []}
+    if "indexed_files" not in st.session_state:
+        st.session_state.indexed_files = []
+
+
+def load_env_file(env_path: str = ".env") -> None:
+    path = Path(env_path)
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
 
 
 def handle_login(username: str, password: str) -> bool:
@@ -175,7 +198,7 @@ def render_file_pipeline() -> None:
     files = st.file_uploader(
         "Upload one or more files",
         accept_multiple_files=True,
-        type=["txt", "pdf", "docx", "csv", "md", "py"],
+        type=["txt", "pdf", "py"],
     )
 
     if files:
@@ -183,44 +206,49 @@ def render_file_pipeline() -> None:
         st.write(f"Queued files: {len(files)}")
         if st.button("Run Ingestion Pipeline", use_container_width=True):
             progress = st.progress(0, text="Initializing pipeline...")
-            stages = [
-                (18, "Validating files..."),
-                (42, "Simulating chunking strategy..."),
-                (68, "Generating embeddings..."),
-                (90, "Building retrieval index..."),
-                (100, "Finalizing and storing metadata..."),
-            ]
-            for value, message in stages:
-                time.sleep(0.6)
-                progress.progress(value, text=message)
-            st.success("Pipeline complete: files processed, chunked, and embedded successfully.")
+
+            context_items: list[dict[str, str]] = []
+            indexed_files: list[str] = []
+            rejected_files: list[str] = []
+
+            progress.progress(20, text="Validating and extracting text...")
+
+            for uploaded in files:
+                try:
+                    file_text = extract_text(uploaded)
+                    chunks = chunk_data(file_text)
+                    if not chunks:
+                        rejected_files.append(f"{uploaded.name} (no text chunks)")
+                        continue
+
+                    indexed_files.append(uploaded.name)
+                    for chunk in chunks:
+                        context_items.append({"source": uploaded.name, "text": chunk})
+
+                except FileProcessingError as exc:
+                    rejected_files.append(f"{uploaded.name} ({exc})")
+
+            progress.progress(65, text="Generating embeddings and building context index...")
+
+            if context_items:
+                st.session_state.context_index = build_context_index(context_items)
+                st.session_state.indexed_files = sorted(set(indexed_files))
+                progress.progress(100, text="Pipeline complete.")
+                st.success(
+                    f"Indexed {len(st.session_state.indexed_files)} files and {len(context_items)} chunks."
+                )
+            else:
+                progress.progress(100, text="Pipeline ended with no indexable content.")
+                st.warning("No supported text could be indexed from uploaded files.")
+
+            if rejected_files:
+                st.warning("Some files were skipped:")
+                for item in rejected_files:
+                    st.write(f"- {item}")
+
+            if st.session_state.indexed_files:
+                st.caption("Indexed Sources: " + ", ".join(st.session_state.indexed_files))
         st.markdown("</div>", unsafe_allow_html=True)
-
-
-def build_agentic_response(query: str) -> tuple[str, str, str]:
-    q = query.lower()
-    if "security" in q or "secure" in q:
-        answer = (
-            "AI Code Vault applies a credential-gated entry point, environment-based secret handling, "
-            "and retrieval-grounded response composition before answer delivery."
-        )
-        source = "Source: Security_Policy_v2.pdf - Section 3.2"
-        confidence = "93%"
-    elif "rag" in q or "retrieval" in q:
-        answer = (
-            "The agent first retrieves top semantic chunks, ranks relevance, and then synthesizes a grounded "
-            "response using context windows from the indexed knowledge base."
-        )
-        source = "Source: RAG_Architecture_Notes.md - Retrieval Flow"
-        confidence = "95%"
-    else:
-        answer = (
-            "Based on indexed project context, the best route is to run semantic retrieval first, validate source "
-            "evidence, and then return a concise answer with confidence tracking."
-        )
-        source = "Source: Agent_Orchestration_Guide.md - Decision Layer"
-        confidence = "92%"
-    return answer, source, confidence
 
 
 def render_agentic_chat() -> None:
@@ -243,25 +271,32 @@ def render_agentic_chat() -> None:
             st.markdown(query)
 
         with st.chat_message("assistant"):
-            with st.spinner("Agent Routing to Analysis Skill..."):
-                time.sleep(1.0)
-                answer, source, confidence = build_agentic_response(query)
+            with st.spinner("Agent routing and context retrieval in progress..."):
+                start = time.perf_counter()
+                result = answer_with_context(query, st.session_state.context_index)
+                elapsed = time.perf_counter() - start
 
-            st.markdown(answer)
-            st.markdown(f"<div class='source-chip'>{source}</div>", unsafe_allow_html=True)
-            st.markdown(f"<span class='score-pill'>Confidence Score: {confidence}</span>", unsafe_allow_html=True)
+            st.markdown(result["answer"])
+            st.markdown(f"<div class='source-chip'>{result['source']}</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"<span class='score-pill'>Confidence Score: {result['confidence']:.2f}%</span>",
+                unsafe_allow_html=True,
+            )
+            st.caption(f"Route: {result['route']} | Response time: {elapsed:.2f}s")
+
+            if result.get("error"):
+                st.warning(result["error"])
 
         st.session_state.chat_history.append(
             {
                 "query": query,
-                "answer": answer,
-                "source": source,
-                "confidence": confidence,
+                "answer": result["answer"],
+                "source": result["source"],
+                "confidence": f"{result['confidence']:.2f}%",
             }
         )
 
-        # Simulate end-to-end response latency while staying below 2 seconds.
-        st.session_state.latencies.append(round(random.uniform(0.95, 1.95), 2))
+        st.session_state.latencies.append(round(elapsed, 2))
         st.session_state.latencies = st.session_state.latencies[-10:]
 
 
@@ -320,6 +355,7 @@ def render_sidebar() -> str:
 
 def main() -> None:
     init_state()
+    load_env_file()
 
     if not st.session_state.is_logged_in:
         render_login()

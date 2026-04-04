@@ -1,7 +1,11 @@
-import random
 import time
+import os
+from pathlib import Path
 import streamlit as st
 import pandas as pd
+
+from ai_logic import answer_with_context, build_context_index
+from processor import FileProcessingError, chunk_data, extract_text
 
 # -----------------------------------
 # PAGE CONFIG
@@ -167,53 +171,36 @@ if "chat_history" not in st.session_state:
 if "current_page" not in st.session_state:
     st.session_state.current_page = "login"
 
+if "context_index" not in st.session_state:
+    st.session_state.context_index = {"items": [], "embeddings": []}
+
+if "indexed_files" not in st.session_state:
+    st.session_state.indexed_files = []
+
+if "latencies" not in st.session_state:
+    st.session_state.latencies = []
+
+
+def load_env_file(env_path: str = ".env") -> None:
+    path = Path(env_path)
+    if not path.exists():
+        return
+
+    for raw_line in path.read_text(encoding="utf-8").splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        os.environ.setdefault(key, value)
+
 # -----------------------------------
 # AUTH
 # -----------------------------------
 def check_login(username: str, password: str) -> bool:
     return username.strip().lower() == "demo" and password.strip() == "vault123"
-
-# -----------------------------------
-# MOCK AI RESPONSE (temporary)
-# Replace later with your real backend/database call
-# -----------------------------------
-def get_mock_response(question: str):
-    lowered = question.lower()
-
-    if "database" in lowered or "sql" in lowered:
-        return (
-            "Database connector is currently in demo mode. In production, this section will query your backend and retrieve live structured records.",
-            [
-                "db_connector.py (future backend module)",
-                "schema_reference.sql (planned integration)"
-            ],
-        )
-
-    if "model" in lowered or "ai" in lowered:
-        return (
-            "The active mock pipeline uses retrieval-augmented prompting and semantic ranking before response generation.",
-            [
-                "Model_Design_Guide.pdf (Section 2.1)",
-                "pipeline_overview.py (lines 14-39)",
-            ],
-        )
-
-    if "index" in lowered or "file" in lowered or "vault" in lowered:
-        return (
-            "Vault indexing is simulated as complete. Files are parsed, chunked, and prepared for semantic retrieval.",
-            [
-                "indexing_notes.pdf (Page 3)",
-                "index_manager.py (lines 51-87)",
-            ],
-        )
-
-    return (
-        "Your AI assistant is currently running in demo mode. Once connected, this panel will respond using your actual backend and database.",
-        [
-            "backend_api.py (future integration)",
-            "vector_store.py (future integration)"
-        ],
-    )
 
 # -----------------------------------
 # LOGIN PAGE
@@ -298,13 +285,17 @@ def render_main_chatbot():
 
     st.markdown('<div class="glass-card">💡 <b>Future purpose:</b> Ask database questions, retrieve file knowledge, generate intelligent responses, and connect with your backend.</div>', unsafe_allow_html=True)
 
+    if not st.session_state.context_index.get("items"):
+        st.info("No indexed context yet. Upload files in Vault Files, then run ingestion.")
+
     for item in st.session_state.chat_history:
         st.markdown(f'<div class="chat-user"><b>👤 You:</b><br>{item["question"]}</div>', unsafe_allow_html=True)
         st.markdown(
             f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{item["answer"]}'
-            f'<br><br><span class="confidence">Confidence Score: 95%</span>'
+            f'<br><br><span class="confidence">Confidence Score: {item["confidence"]}</span>'
             f'<br><br><b>Source Citations:</b><br>'
-            + "".join([f"<div class='source'>• {src}</div>" for src in item["sources"]])
+            + f"<div class='source'>• {item['source']}</div>"
+            + f"<div class='small-muted'>Route: {item['route']}</div>"
             + '</div>',
             unsafe_allow_html=True
         )
@@ -315,48 +306,93 @@ def render_main_chatbot():
         st.markdown(f'<div class="chat-user"><b>👤 You:</b><br>{question}</div>', unsafe_allow_html=True)
 
         with st.spinner("AI is processing your query..."):
-            time.sleep(1.2)
-
-            # -----------------------------------
-            # FUTURE BACKEND CONNECTION POINT
-            # Replace this later with:
-            # answer, sources = call_backend_api(question)
-            # -----------------------------------
-            answer, sources = get_mock_response(question)
+            start = time.perf_counter()
+            result = answer_with_context(question, st.session_state.context_index)
+            elapsed = time.perf_counter() - start
 
         st.markdown(
-            f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{answer}'
-            f'<br><br><span class="confidence">Confidence Score: 95%</span>'
-            f'<br><br><b>Source Citations:</b><br>'
-            + "".join([f"<div class='source'>• {src}</div>" for src in sources])
+            f'<div class="chat-ai"><b>🤖 AI Assistant:</b><br>{result["answer"]}'
+            f'<br><br><span class="confidence">Confidence Score: {result["confidence"]:.2f}%</span>'
+            f'<br><br><b>Source Citation:</b><br>'
+            + f"<div class='source'>• {result['source']}</div>"
+            + f"<div class='small-muted'>Route: {result['route']} | Response Time: {elapsed:.2f}s</div>"
             + '</div>',
             unsafe_allow_html=True
         )
 
+        if result.get("error"):
+            st.warning(result["error"])
+
         st.session_state.chat_history.append({
             "question": question,
-            "answer": answer,
-            "sources": sources,
+            "answer": result["answer"],
+            "source": result["source"],
+            "confidence": f"{result['confidence']:.2f}%",
+            "route": result["route"],
         })
+
+        st.session_state.latencies.append(round(elapsed, 2))
+        st.session_state.latencies = st.session_state.latencies[-20:]
 
 # -----------------------------------
 # VAULT PAGE
 # -----------------------------------
 def render_vault_page():
     st.title("📁 Vault Files")
-    st.caption("Hardcoded demo files for now — later connect real uploaded / indexed files")
+    st.caption("Upload and index real .py, .txt, and .pdf files for retrieval-grounded chat")
 
-    indexed_files = [
-        "main.py", "retriever.py", "index_manager.py", "context_builder.py",
-        "benchmark_runner.py", "Model_Design_Guide.pdf", "indexing_notes.pdf",
-        "analytics_summary.pdf", "vault_status_report.pdf", "retrieval_log.pdf"
-    ]
+    uploads = st.file_uploader(
+        "Upload Vault Files",
+        accept_multiple_files=True,
+        type=["py", "txt", "pdf"],
+    )
+
+    if uploads and st.button("Run Ingestion Pipeline", use_container_width=True):
+        progress = st.progress(0, text="Initializing file processing...")
+        context_items: list[dict[str, str]] = []
+        indexed_files: list[str] = []
+        rejected_files: list[str] = []
+
+        progress.progress(25, text="Extracting text and building chunks...")
+        for uploaded in uploads:
+            try:
+                file_text = extract_text(uploaded)
+                chunks = chunk_data(file_text)
+                if not chunks:
+                    rejected_files.append(f"{uploaded.name} (no text chunks)")
+                    continue
+
+                indexed_files.append(uploaded.name)
+                for chunk in chunks:
+                    context_items.append({"source": uploaded.name, "text": chunk})
+            except FileProcessingError as exc:
+                rejected_files.append(f"{uploaded.name} ({exc})")
+
+        progress.progress(70, text="Embedding chunks and building vector context...")
+        if context_items:
+            st.session_state.context_index = build_context_index(context_items)
+            st.session_state.indexed_files = sorted(set(indexed_files))
+            st.success(
+                f"Indexed {len(st.session_state.indexed_files)} files and {len(context_items)} chunks."
+            )
+        else:
+            st.warning("No supported text could be indexed from uploaded files.")
+
+        progress.progress(100, text="Ingestion complete.")
+
+        if rejected_files:
+            st.warning("Some files were skipped:")
+            for item in rejected_files:
+                st.write(f"- {item}")
 
     st.markdown('<div class="glass-card">', unsafe_allow_html=True)
     st.subheader("📂 Indexed Files")
-    for file_name in indexed_files:
+    for file_name in st.session_state.indexed_files:
         icon = "🐍" if file_name.endswith(".py") else "📄"
         st.markdown(f"- {icon} **{file_name}**")
+
+    if not st.session_state.indexed_files:
+        st.markdown("No files indexed yet.")
     st.markdown("</div>", unsafe_allow_html=True)
 
 # -----------------------------------
@@ -427,9 +463,19 @@ Answer shown in chatbot
     """)
     st.markdown("</div>", unsafe_allow_html=True)
 
+    if st.session_state.latencies:
+        st.markdown('<div class="glass-card">', unsafe_allow_html=True)
+        st.subheader("⏱ Runtime Metrics")
+        avg_latency = sum(st.session_state.latencies) / len(st.session_state.latencies)
+        st.write(f"Average query latency: {avg_latency:.2f}s")
+        st.write(f"Last query latency: {st.session_state.latencies[-1]:.2f}s")
+        st.markdown("</div>", unsafe_allow_html=True)
+
 # -----------------------------------
 # APP FLOW
 # -----------------------------------
+load_env_file()
+
 if not st.session_state.is_authenticated or st.session_state.current_page == "login":
     render_login_page()
 else:

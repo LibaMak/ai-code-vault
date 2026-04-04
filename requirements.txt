@@ -4,3 +4,5 @@ matplotlib
 groq
 sentence-transformers
 mysql-connector-python
+PyPDF2
+numpy
