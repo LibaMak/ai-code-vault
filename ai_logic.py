@@ -18,6 +18,11 @@ from processor import FileProcessingError, get_embeddings
 DEFAULT_ROUTER_MODEL = "llama-3.1-8b-instant"
 DEFAULT_ANSWER_MODEL = "llama-3.3-70b-versatile"
 FALLBACK_MODELS = ("llama-3.1-8b-instant",)
+GENERAL_CHAT_ROUTE = "General Chat"
+DEPRECATED_MODEL_MAP = {
+    "llama3-70b-8192": DEFAULT_ANSWER_MODEL,
+    "llama-3-70b-8192": DEFAULT_ANSWER_MODEL,
+}
 
 
 class AIServiceError(Exception):
@@ -55,6 +60,45 @@ def _get_groq_client(api_key: str | None = None) -> Groq:
     return Groq(api_key=key)
 
 
+def _resolve_model_name(model_name: str | None, default_model: str) -> str:
+    """Resolve model name and transparently replace known deprecated IDs."""
+    candidate = (model_name or "").strip()
+    if not candidate:
+        return default_model
+
+    normalized = candidate.lower()
+    return DEPRECATED_MODEL_MAP.get(normalized, candidate)
+
+
+def _is_general_chat_query(query: str) -> bool:
+    """Detect greetings and lightweight conversational prompts."""
+    lowered = (query or "").strip().lower()
+    if not lowered:
+        return True
+
+    direct_matches = {
+        "hi",
+        "hello",
+        "hey",
+        "good morning",
+        "good afternoon",
+        "good evening",
+        "how are you",
+        "thanks",
+        "thank you",
+        "bye",
+        "who are you",
+        "what can you do",
+    }
+    if lowered in direct_matches:
+        return True
+
+    if len(lowered.split()) <= 6 and any(token in lowered for token in direct_matches):
+        return True
+
+    return False
+
+
 def _invoke_with_model_fallback(
     client: Groq,
     messages: list[dict[str, str]],
@@ -64,10 +108,11 @@ def _invoke_with_model_fallback(
     max_tokens: int,
 ):
     """Call Groq chat completion and retry if a model is decommissioned."""
-    models_to_try: list[str] = [primary_model]
+    models_to_try: list[str] = [_resolve_model_name(primary_model, DEFAULT_ANSWER_MODEL)]
     for fallback_model in FALLBACK_MODELS:
-        if fallback_model not in models_to_try:
-            models_to_try.append(fallback_model)
+        resolved_fallback = _resolve_model_name(fallback_model, DEFAULT_ANSWER_MODEL)
+        if resolved_fallback not in models_to_try:
+            models_to_try.append(resolved_fallback)
 
     last_error: Exception | None = None
 
@@ -95,7 +140,10 @@ def route_query(query: str, api_key: str | None = None) -> str:
     """Route query into one of: Search the Vault, Summarize a File, Explain Code."""
     cleaned = (query or "").strip()
     if not cleaned:
-        return "Search the Vault"
+        return GENERAL_CHAT_ROUTE
+
+    if _is_general_chat_query(cleaned):
+        return GENERAL_CHAT_ROUTE
 
     lower = cleaned.lower()
 
@@ -124,7 +172,10 @@ def route_query(query: str, api_key: str | None = None) -> str:
     # LLM fallback for ambiguous prompts.
     try:
         client = _get_groq_client(api_key)
-        router_model = os.getenv("GROQ_ROUTER_MODEL", DEFAULT_ROUTER_MODEL)
+        router_model = _resolve_model_name(
+            os.getenv("GROQ_ROUTER_MODEL", DEFAULT_ROUTER_MODEL),
+            DEFAULT_ROUTER_MODEL,
+        )
         response = _invoke_with_model_fallback(
             client=client,
             primary_model=router_model,
@@ -135,7 +186,7 @@ def route_query(query: str, api_key: str | None = None) -> str:
                     "role": "system",
                     "content": (
                         "Classify user intent into exactly one label: "
-                        "Search the Vault | Summarize a File | Explain Code. "
+                        "Search the Vault | Summarize a File | Explain Code | General Chat. "
                         "Return only the label text."
                     ),
                 },
@@ -143,7 +194,7 @@ def route_query(query: str, api_key: str | None = None) -> str:
             ],
         )
         label = (response.choices[0].message.content or "").strip()
-        if label in {"Search the Vault", "Summarize a File", "Explain Code"}:
+        if label in {"Search the Vault", "Summarize a File", "Explain Code", GENERAL_CHAT_ROUTE}:
             return label
     except Exception:
         # If API is unavailable, preserve UX with deterministic fallback.
@@ -217,6 +268,39 @@ def answer_with_context(
     """
     try:
         route = route_query(query, api_key=api_key)
+
+        if route == GENERAL_CHAT_ROUTE:
+            client = _get_groq_client(api_key)
+            answer_model = _resolve_model_name(model, DEFAULT_ANSWER_MODEL)
+            completion = _invoke_with_model_fallback(
+                client=client,
+                primary_model=answer_model,
+                temperature=0.3,
+                max_tokens=180,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are the AI Code Vault assistant. "
+                            "For greetings or simple chat, reply naturally and briefly. "
+                            "If asked for vault-specific answers, ask the user to upload/index files."
+                        ),
+                    },
+                    {"role": "user", "content": query},
+                ],
+            )
+
+            answer = (completion.choices[0].message.content or "").strip()
+            return {
+                "ok": True,
+                "route": GENERAL_CHAT_ROUTE,
+                "answer": answer,
+                "source": "Source: N/A (General Assistant)",
+                "confidence": 100.0,
+                "retrieved": [],
+                "error": None,
+            }
+
         retrieved = retrieve_relevant_context(query, context_index, top_k=top_k)
 
         if not retrieved:
@@ -251,7 +335,7 @@ def answer_with_context(
         )
 
         client = _get_groq_client(api_key)
-        answer_model = os.getenv("GROQ_MODEL", model)
+        answer_model = _resolve_model_name(model, DEFAULT_ANSWER_MODEL)
         completion = _invoke_with_model_fallback(
             client=client,
             primary_model=answer_model,
@@ -296,11 +380,17 @@ def answer_with_context(
             "error": str(exc),
         }
     except Exception as exc:  # pragma: no cover - external service/runtime variability
+        message = str(exc)
+        if "decommission" in message.lower() or "model_decommissioned" in message.lower():
+            message = (
+                "Configured Groq model is deprecated. "
+                "Use GROQ_MODEL=llama-3.3-70b-versatile or leave it unset."
+            )
         return {
             "ok": False,
             "route": "Search the Vault",
             "answer": "An unexpected error occurred while generating the response.",
             "source": "Source: N/A",
             "confidence": 0.0,
-            "error": f"Unexpected AI error: {exc}",
+            "error": f"Unexpected AI error: {message}",
         }
